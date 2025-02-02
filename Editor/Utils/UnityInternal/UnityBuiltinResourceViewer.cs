@@ -11,10 +11,9 @@ namespace Yueby
 {
     public class UnityBuiltinResourceViewer : EditorWindow
     {
-        private const float ICON_SIZE = 60;
-        private const float ICON_PADDING = 10;
-        private const float LEFT_PANEL_WIDTH = 300;
-        private const float GRID_LABEL_HEIGHT = 20;
+        private const float ICON_SIZE = 48;
+        private const float ICON_PADDING = 4;
+        private const float LEFT_PANEL_WIDTH = 80;
         private const string PREFS_KEY_SELECTED_TAB = "UnityBuiltinResourceViewer_SelectedTab";
         private const string PREFS_KEY_SEARCH_TEXT = "UnityBuiltinResourceViewer_SearchText";
         private const string PREFS_KEY_VIEW_MODE = "UnityBuiltinResourceViewer_ViewMode";
@@ -22,8 +21,8 @@ namespace Yueby
         private const float MAX_ICON_SIZE = 128;
         private const string PREFS_KEY_ICON_SIZE = "UnityBuiltinResourceViewer_IconSize";
 
-        private const int BATCH_SIZE = 500;
-        private const int YIELD_INTERVAL = 50;
+        private const int BATCH_SIZE = 1000;
+        private const int YIELD_INTERVAL = 100;
         private const int MAX_POOL_SIZE = 200;
         private const int SMALL_ICON_SIZE = 16;
         private const int MEDIUM_ICON_SIZE = 32;
@@ -89,7 +88,7 @@ namespace Yueby
         static void Init()
         {
             UnityBuiltinResourceViewer window = GetWindow<UnityBuiltinResourceViewer>();
-            window.minSize = new Vector2(800, 400);
+            window.minSize = new Vector2(600, 400);
             window.Show();
         }
 
@@ -266,32 +265,75 @@ namespace Yueby
                         allStyles.Add(style);
                     }
                 }
-                loadingProgress = 0.2f;
-                await Task.Yield();
+                loadingProgress = 0.1f;
 
                 // 在主线程获取资源
                 var editorAssetBundle = GetEditorAssetBundle();
                 var iconsPath = GetIconsPath();
                 var assetNames = editorAssetBundle.GetAllAssetNames();
+                loadingProgress = 0.2f;
 
-                // 预处理和过滤资源名称
-                pendingIconNames = assetNames
-                    .Where(name => name.StartsWith(iconsPath, StringComparison.OrdinalIgnoreCase) &&
-                                 (name.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
-                                  name.EndsWith(".asset", StringComparison.OrdinalIgnoreCase)))
-                    .Select(name => Path.GetFileNameWithoutExtension(name))
-                    .Distinct()
-                    .ToList();
-
+                // 预处理和过滤资源名称 - 优化过滤逻辑
+                pendingIconNames = new List<string>(2000);
+                foreach (var name in assetNames)
+                {
+                    if (name.StartsWith(iconsPath, StringComparison.OrdinalIgnoreCase) &&
+                        (name.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
+                         name.EndsWith(".asset", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        pendingIconNames.Add(Path.GetFileNameWithoutExtension(name));
+                    }
+                }
+                pendingIconNames = pendingIconNames.Distinct().ToList();
                 loadingProgress = 0.3f;
-                await Task.Yield();
 
-                // 处理图标
+                // 处理图标 - 优化批处理逻辑
                 currentLoadingIndex = 0;
+                var batchIcons = new List<(string name, GUIContent content)>(BATCH_SIZE);
 
                 while (currentLoadingIndex < pendingIconNames.Count)
                 {
-                    await LoadNextBatch();
+                    batchIcons.Clear();
+                    int endIndex = Mathf.Min(currentLoadingIndex + BATCH_SIZE, pendingIconNames.Count);
+                    
+                    // 批量收集图标内容
+                    for (int i = currentLoadingIndex; i < endIndex; i++)
+                    {
+                        string iconName = pendingIconNames[i];
+                        try
+                        {
+                            var content = EditorGUIUtility.IconContent(iconName);
+                            if (content != null && content.image != null)
+                            {
+                                batchIcons.Add((iconName, content));
+                            }
+                        }
+                        catch (Exception)
+                        {
+                            // 忽略加载失败的图标
+                            continue;
+                        }
+
+                        if ((i - currentLoadingIndex) % YIELD_INTERVAL == 0 && i > currentLoadingIndex)
+                        {
+                            loadingProgress = 0.3f + 0.7f * ((float)i / pendingIconNames.Count);
+                            await Task.Yield();
+                        }
+                    }
+
+                    // 批量处理收集到的图标
+                    foreach (var (iconName, content) in batchIcons)
+                    {
+                        allIconNames.Add(iconName);
+                        iconDataCache[iconName] = new IconData
+                        {
+                            content = content,
+                            size = new Vector2(((Texture2D)content.image).width, ((Texture2D)content.image).height),
+                            isDark = iconName.StartsWith("d_")
+                        };
+                    }
+
+                    currentLoadingIndex = endIndex;
                     loadingProgress = 0.3f + 0.7f * ((float)currentLoadingIndex / pendingIconNames.Count);
                     await Task.Yield();
                 }
@@ -308,6 +350,7 @@ namespace Yueby
             {
                 isLoading = false;
                 pendingIconNames.Clear();
+                pendingIconNames.TrimExcess(); // 释放多余内存
                 Repaint();
             }
         }
@@ -317,31 +360,6 @@ namespace Yueby
             if (!stylesInitialized)
             {
                 InitStyles();
-            }
-
-            if (isLoading)
-            {
-                EditorGUILayout.BeginVertical();
-                GUILayout.FlexibleSpace();
-
-                EditorGUILayout.BeginHorizontal();
-                GUILayout.FlexibleSpace();
-
-                EditorGUILayout.BeginVertical();
-                GUILayout.Label("Loading...", headerStyle);
-
-                // Progress bar
-                Rect progressRect = GUILayoutUtility.GetRect(300, 20);
-                EditorGUI.ProgressBar(progressRect, loadingProgress, $"{(loadingProgress * 100):F0}%");
-
-                EditorGUILayout.EndVertical();
-
-                GUILayout.FlexibleSpace();
-                EditorGUILayout.EndHorizontal();
-
-                GUILayout.FlexibleSpace();
-                EditorGUILayout.EndVertical();
-                return;
             }
 
             DrawToolbar();
@@ -354,6 +372,17 @@ namespace Yueby
 
             DrawStatusBar();
 
+            // 在加载时显示进度条
+            if (isLoading)
+            {
+                var rect = position;
+                rect.y = rect.height - 1; // 贴着窗口底部
+                rect.height = 1; // 减小高度使其更细
+                rect.x = 0; // 从窗口最左边开始
+                rect.width = position.width; // 延伸到窗口最右边
+                EditorGUI.ProgressBar(rect, loadingProgress, "");
+            }
+
             if (GUI.changed)
             {
                 Repaint();
@@ -365,29 +394,39 @@ namespace Yueby
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
 
             string[] tabs = new string[] { "Icons", "Styles" };
-            EditorGUI.BeginChangeCheck();
-            selectedTab = GUILayout.Toolbar(selectedTab, tabs, EditorStyles.toolbarButton, GUILayout.Width(200));
-            if (EditorGUI.EndChangeCheck())
+            using (new EditorGUI.DisabledScope(isLoading)) // 加载时禁用标签切换
             {
-                selectedIconName = null;
-                selectedIconTexture = null;
-                FilterItems();
+                EditorGUI.BeginChangeCheck();
+                selectedTab = GUILayout.Toolbar(selectedTab, tabs, EditorStyles.toolbarButton, GUILayout.Width(200));
+                if (EditorGUI.EndChangeCheck())
+                {
+                    selectedIconName = null;
+                    selectedIconTexture = null;
+                    FilterItems();
+                }
             }
 
             if (!isStyleTab)
             {
                 GUILayout.Space(10);
-                EditorGUI.BeginChangeCheck();
-                currentCategory = (IconCategory)EditorGUILayout.EnumPopup(currentCategory, EditorStyles.toolbarPopup, GUILayout.Width(80));
-                if (EditorGUI.EndChangeCheck())
+                using (new EditorGUI.DisabledScope(isLoading)) // 加载时禁用分类选择
                 {
-                    FilterItems();
+                    EditorGUI.BeginChangeCheck();
+                    currentCategory = (IconCategory)EditorGUILayout.EnumPopup(currentCategory, EditorStyles.toolbarPopup, GUILayout.Width(80));
+                    if (EditorGUI.EndChangeCheck())
+                    {
+                        FilterItems();
+                    }
                 }
             }
 
             GUILayout.FlexibleSpace();
 
-            if (isStyleTab)
+            if (isLoading)
+            {
+                EditorGUILayout.LabelField($"Loading... {(loadingProgress * 100):F0}%", EditorStyles.miniLabel);
+            }
+            else if (isStyleTab)
             {
                 EditorGUILayout.LabelField($"Styles: {allStyles.Count}", EditorStyles.miniLabel);
             }
@@ -401,65 +440,108 @@ namespace Yueby
 
         void DrawLeftPanel()
         {
-            EditorGUILayout.BeginVertical(GUILayout.Width(LEFT_PANEL_WIDTH));
+            EditorGUILayout.BeginVertical(GUILayout.Width(LEFT_PANEL_WIDTH), GUILayout.MaxWidth(LEFT_PANEL_WIDTH));
 
-            EditorGUILayout.Space(10);
-            EditorGUILayout.LabelField("Preview", headerStyle);
+            EditorGUILayout.Space(2);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.LabelField("Preview", EditorStyles.miniLabel);
+            }
 
             if (selectedIconName != null)
             {
-                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-                Rect previewRect = GUILayoutUtility.GetRect(LEFT_PANEL_WIDTH - 20, LEFT_PANEL_WIDTH - 20);
-                previewRect = EditorGUI.IndentedRect(previewRect);
-
-                if (isStyleTab)
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
                 {
-                    var style = filteredStyles.FirstOrDefault(s => s.name == selectedIconName);
-                    if (style?.normal.background != null)
+                    // 预览区域宽度
+                    float previewSize = LEFT_PANEL_WIDTH - 48; // 增加边距，确保不会撑开面板
+                    using (new EditorGUILayout.HorizontalScope())
                     {
-                        GUI.DrawTexture(previewRect, style.normal.background, ScaleMode.ScaleToFit);
+                        GUILayout.FlexibleSpace(); // 使用FlexibleSpace来居中
+                        Rect previewRect = GUILayoutUtility.GetRect(previewSize, previewSize);
+                        if (isStyleTab)
+                        {
+                            var style = filteredStyles.FirstOrDefault(s => s.name == selectedIconName);
+                            if (style?.normal.background != null)
+                            {
+                                GUI.DrawTexture(previewRect, style.normal.background, ScaleMode.ScaleToFit);
+                            }
+                        }
+                        else if (selectedIconTexture != null)
+                        {
+                            GUI.DrawTexture(previewRect, selectedIconTexture, ScaleMode.ScaleToFit);
+                        }
+                        GUILayout.FlexibleSpace(); // 使用FlexibleSpace来居中
+                    }
+
+                    EditorGUILayout.Space(1);
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        GUILayout.Space(2);
+                        EditorGUILayout.LabelField("Name", EditorStyles.miniLabel);
+                        GUILayout.Space(2);
+                    }
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        GUILayout.Space(2);
+                        EditorGUI.SelectableLabel(EditorGUILayout.GetControlRect(false, 28), selectedIconName, EditorStyles.textField);
+                        GUILayout.Space(2);
+                    }
+
+                    if (!isStyleTab)
+                    {
+                        EditorGUILayout.Space(1);
+                        using (new EditorGUILayout.HorizontalScope())
+                        {
+                            GUILayout.Space(2);
+                            EditorGUILayout.LabelField("Code", EditorStyles.miniLabel);
+                            GUILayout.Space(2);
+                        }
+                        using (new EditorGUILayout.HorizontalScope())
+                        {
+                            GUILayout.Space(2);
+                            string codeExample = selectedIconName.StartsWith("d_") ?
+                                $"EditorGUIUtility.IconContent(\"{selectedIconName}\") // Dark" :
+                                $"EditorGUIUtility.IconContent(\"{selectedIconName}\")";
+                            EditorGUI.SelectableLabel(EditorGUILayout.GetControlRect(false, 32), codeExample, EditorStyles.textField);
+                            GUILayout.Space(2);
+                        }
+
+                        if (selectedIconTexture != null)
+                        {
+                            EditorGUILayout.Space(1);
+                            using (new EditorGUILayout.HorizontalScope())
+                            {
+                                GUILayout.Space(2);
+                                EditorGUILayout.LabelField($"{selectedIconTexture.width}×{selectedIconTexture.height}", EditorStyles.miniLabel);
+                                GUILayout.Space(2);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        EditorGUILayout.Space(1);
+                        using (new EditorGUILayout.HorizontalScope())
+                        {
+                            GUILayout.Space(2);
+                            EditorGUILayout.LabelField("Code", EditorStyles.miniLabel);
+                            GUILayout.Space(2);
+                        }
+                        using (new EditorGUILayout.HorizontalScope())
+                        {
+                            GUILayout.Space(2);
+                            string codeExample = $"new GUIStyle(\"{selectedIconName}\")";
+                            EditorGUI.SelectableLabel(EditorGUILayout.GetControlRect(false, 32), codeExample, EditorStyles.textField);
+                            GUILayout.Space(2);
+                        }
                     }
                 }
-                else if (selectedIconTexture != null)
-                {
-                    GUI.DrawTexture(previewRect, selectedIconTexture, ScaleMode.ScaleToFit);
-                }
-
-                EditorGUILayout.Space(5);
-                EditorGUILayout.LabelField("Name", subHeaderStyle);
-                EditorGUI.SelectableLabel(EditorGUILayout.GetControlRect(), selectedIconName, EditorStyles.textField);
-
-                if (!isStyleTab)
-                {
-                    EditorGUILayout.Space(5);
-                    EditorGUILayout.LabelField("Code", subHeaderStyle);
-                    string codeExample = selectedIconName.StartsWith("d_") ?
-                        $"EditorGUIUtility.IconContent(\"{selectedIconName}\") // Dark" :
-                        $"EditorGUIUtility.IconContent(\"{selectedIconName}\")";
-                    EditorGUI.SelectableLabel(EditorGUILayout.GetControlRect(true, 40), codeExample, EditorStyles.textField);
-
-                    if (selectedIconTexture != null)
-                    {
-                        EditorGUILayout.Space(5);
-                        EditorGUILayout.LabelField("Size", subHeaderStyle);
-                        EditorGUILayout.LabelField($"W: {selectedIconTexture.width}px");
-                        EditorGUILayout.LabelField($"H: {selectedIconTexture.height}px");
-                    }
-                }
-                else
-                {
-                    EditorGUILayout.Space(5);
-                    EditorGUILayout.LabelField("Code", subHeaderStyle);
-                    string codeExample = $"new GUIStyle(\"{selectedIconName}\")";
-                    EditorGUI.SelectableLabel(EditorGUILayout.GetControlRect(true, 40), codeExample, EditorStyles.textField);
-                }
-
-                EditorGUILayout.EndVertical();
             }
             else
             {
-                EditorGUILayout.HelpBox($"Select a {(isStyleTab ? "style" : "icon")}", MessageType.Info);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    EditorGUILayout.HelpBox($"Select a {(isStyleTab ? "style" : "icon")}", MessageType.Info);
+                }
             }
 
             EditorGUILayout.EndVertical();
@@ -472,37 +554,46 @@ namespace Yueby
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
 
             // 搜索区域
-            EditorGUI.BeginChangeCheck();
-            searchText = EditorGUILayout.TextField(searchText, EditorStyles.toolbarSearchField);
-            if (EditorGUI.EndChangeCheck())
+            using (new EditorGUI.DisabledScope(isLoading)) // 加载时禁用搜索
             {
-                FilterItems();
-            }
-            if (GUILayout.Button("Clear", EditorStyles.toolbarButton, GUILayout.Width(40)))
-            {
-                searchText = "";
-                FilterItems();
+                EditorGUI.BeginChangeCheck();
+                searchText = EditorGUILayout.TextField(searchText, EditorStyles.toolbarSearchField);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    FilterItems();
+                }
+                if (GUILayout.Button("Clear", EditorStyles.toolbarButton, GUILayout.Width(40)))
+                {
+                    searchText = "";
+                    FilterItems();
+                }
             }
 
             GUILayout.Space(10);
 
             // 视图切换
-            EditorGUI.BeginChangeCheck();
-            useListView = GUILayout.Toggle(useListView, useListView ? "List" : "Grid", EditorStyles.toolbarButton, GUILayout.Width(60));
-            if (EditorGUI.EndChangeCheck())
+            using (new EditorGUI.DisabledScope(isLoading)) // 加载时禁用视图切换
             {
-                SavePrefs();
+                EditorGUI.BeginChangeCheck();
+                useListView = GUILayout.Toggle(useListView, useListView ? "List" : "Grid", EditorStyles.toolbarButton, GUILayout.Width(60));
+                if (EditorGUI.EndChangeCheck())
+                {
+                    SavePrefs();
+                }
             }
 
             // 网格视图缩放控制
             if (!useListView)
             {
                 GUILayout.Space(10);
-                EditorGUI.BeginChangeCheck();
-                currentIconSize = GUILayout.HorizontalSlider(currentIconSize, MIN_ICON_SIZE, MAX_ICON_SIZE, GUILayout.Width(100));
-                if (EditorGUI.EndChangeCheck())
+                using (new EditorGUI.DisabledScope(isLoading)) // 加载时禁用缩放
                 {
-                    SavePrefs();
+                    EditorGUI.BeginChangeCheck();
+                    currentIconSize = GUILayout.HorizontalSlider(currentIconSize, MIN_ICON_SIZE, MAX_ICON_SIZE, GUILayout.Width(100));
+                    if (EditorGUI.EndChangeCheck())
+                    {
+                        SavePrefs();
+                    }
                 }
                 GUILayout.Label($"{Mathf.RoundToInt(currentIconSize)}px", EditorStyles.miniLabel, GUILayout.Width(40));
             }
@@ -547,7 +638,7 @@ namespace Yueby
             float viewWidth = viewRect.width - GUI.skin.verticalScrollbar.fixedWidth;
 
             int itemCount = isStyleTab ? filteredStyles.Count : filteredIconNames.Count;
-            float itemHeight = EditorGUIUtility.singleLineHeight + 4; // 单行高度加上少量间距
+            float itemHeight = EditorGUIUtility.singleLineHeight + 2; // 减小行间距
             float contentHeight = itemCount * itemHeight;
 
             gridScrollPosition = GUI.BeginScrollView(viewRect, gridScrollPosition,
@@ -576,9 +667,9 @@ namespace Yueby
                 visibleItems.Add(item);
 
                 float yPos = i * itemHeight;
-                float iconSize = EditorGUIUtility.singleLineHeight;
+                float iconSize = EditorGUIUtility.singleLineHeight - 2; // 减小图标大小
                 Rect itemRect = new Rect(0, yPos, viewWidth, itemHeight);
-                Rect iconRect = new Rect(4, yPos + 2, iconSize, iconSize);
+                Rect iconRect = new Rect(2, yPos + 1, iconSize, iconSize); // 减小左边距和上边距
 
                 // 更新项数据
                 item.rect = iconRect;
@@ -616,8 +707,8 @@ namespace Yueby
                 }
 
                 // 绘制名称
-                Rect labelRect = new Rect(iconSize + 12, yPos + 2,
-                    viewWidth - iconSize - 16, EditorGUIUtility.singleLineHeight);
+                Rect labelRect = new Rect(iconSize + 6, yPos + 1, // 减小文本左边距
+                    viewWidth - iconSize - 8, EditorGUIUtility.singleLineHeight);
                 GUI.Label(labelRect, new GUIContent(item.name, item.name), EditorStyles.label);
 
                 // 处理点击
@@ -638,22 +729,27 @@ namespace Yueby
         {
             Rect viewRect = GUILayoutUtility.GetRect(0, viewHeight);
             float viewWidth = viewRect.width - GUI.skin.verticalScrollbar.fixedWidth;
-            float totalSize = currentIconSize + ICON_PADDING * 2;
+            float totalItemSize = currentIconSize + ICON_PADDING * 2;
 
-            columnCount = Mathf.FloorToInt(viewWidth / totalSize);
+            columnCount = Mathf.FloorToInt(viewWidth / totalItemSize);
             if (columnCount < 1) columnCount = 1;
+
+            // 重新计算实际的图标间距，以便均匀分布
+            float availableWidth = viewWidth - GUI.skin.verticalScrollbar.fixedWidth;
+            float actualItemWidth = availableWidth / columnCount;
+            float actualPadding = (actualItemWidth - currentIconSize) / 2;
 
             int itemCount = isStyleTab ? filteredStyles.Count : filteredIconNames.Count;
             int rowCount = Mathf.CeilToInt((float)itemCount / columnCount);
-            float contentHeight = rowCount * totalSize;
+            float contentHeight = rowCount * totalItemSize;  // 移除标签高度
 
             gridScrollPosition = GUI.BeginScrollView(viewRect, gridScrollPosition,
                 new Rect(0, 0, viewWidth, contentHeight));
 
             // 计算可见范围
             float scrollY = gridScrollPosition.y;
-            int startRow = Mathf.Max(0, Mathf.FloorToInt(scrollY / totalSize) - 1);
-            int endRow = Mathf.Min(rowCount, startRow + Mathf.CeilToInt(viewRect.height / totalSize) + 2);
+            int startRow = Mathf.Max(0, Mathf.FloorToInt(scrollY / totalItemSize) - 1);
+            int endRow = Mathf.Min(rowCount, startRow + Mathf.CeilToInt(viewRect.height / totalItemSize) + 2);
 
             visibleStartIndex = startRow * columnCount;
             visibleEndIndex = Mathf.Min(itemCount, endRow * columnCount);
@@ -671,8 +767,8 @@ namespace Yueby
                 int row = i / columnCount;
                 int col = i % columnCount;
 
-                float x = col * totalSize + ICON_PADDING;
-                float y = row * totalSize + ICON_PADDING;
+                float x = col * actualItemWidth + actualPadding;
+                float y = row * totalItemSize + ICON_PADDING;
 
                 string itemName = isStyleTab ? filteredStyles[i].name : filteredIconNames[i];
                 bool isSelected = itemName == selectedIconName;
@@ -682,10 +778,20 @@ namespace Yueby
                 visibleItems.Add(item);
 
                 // 更新项数据
-                item.rect = new Rect(x, y, currentIconSize, currentIconSize);
+                Rect iconRect = new Rect(x, y, currentIconSize, currentIconSize);
+                item.rect = iconRect;
                 item.name = itemName;
                 item.isSelected = isSelected;
 
+                // 绘制背景和边框
+                Rect itemRect = new Rect(x - actualPadding, y - ICON_PADDING, 
+                    actualItemWidth, currentIconSize + ICON_PADDING * 2);
+                if (isSelected)
+                {
+                    GUI.Box(itemRect, "", selectedGridItemStyle);
+                }
+
+                // 绘制图标
                 if (isStyleTab)
                 {
                     var style = filteredStyles[i];
@@ -697,15 +803,13 @@ namespace Yueby
                     item.texture = content?.image as Texture2D;
                 }
 
-                // 绘制项
-                GUI.Box(item.rect, "", item.isSelected ? selectedGridItemStyle : gridItemStyle);
                 if (item.texture != null)
                 {
-                    DrawTextureInRect(item.texture, item.rect);
+                    DrawTextureInRect(item.texture, iconRect);
                 }
 
                 // 处理点击
-                if (Event.current.type == EventType.MouseDown && item.rect.Contains(Event.current.mousePosition))
+                if (Event.current.type == EventType.MouseDown && itemRect.Contains(Event.current.mousePosition))
                 {
                     if (isStyleTab)
                         SelectStyle(filteredStyles[i]);
