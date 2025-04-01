@@ -23,9 +23,9 @@ namespace Yueby.Utils
             if (Languages == null || Languages.Count == 0) return;
 
             if (!_darkLanguageIcon)
-                _darkLanguageIcon = AssetDatabase.LoadMainAssetAtPath("Packages/yueby.tools.avatar-tools/Editor/Assets/Sprites/LanguageIconDark.png") as Texture2D;
+                _darkLanguageIcon = AssetDatabase.LoadMainAssetAtPath("Packages/yueby.tools.editor-core/Editor/Assets/Sprites/LanguageIconDark.png") as Texture2D;
             if (!_lightLanguageIcon)
-                _lightLanguageIcon = AssetDatabase.LoadMainAssetAtPath("Packages/yueby.tools.avatar-tools/Editor/Assets/Sprites/LanguageIconLight.png") as Texture2D;
+                _lightLanguageIcon = AssetDatabase.LoadMainAssetAtPath("Packages/yueby.tools.editor-core/Editor/Assets/Sprites/LanguageIconLight.png") as Texture2D;
 
             var rect = new Rect(x, y, 18, 18);
 
