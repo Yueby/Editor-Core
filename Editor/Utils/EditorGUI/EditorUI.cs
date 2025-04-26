@@ -989,8 +989,15 @@ namespace Yueby.Utils
             if (type == 1)
                 EditorGUILayout.Space();
         }
-    }
 
+        public static void SetColor(Color color, UnityAction action)
+        {
+            var originalColor = GUI.color;
+            GUI.color = color;
+            action?.Invoke();
+            GUI.color = originalColor;
+        }
+    }
     public enum LineType
     {
         Horizontal,

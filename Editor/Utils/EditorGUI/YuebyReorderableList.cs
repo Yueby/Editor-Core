@@ -15,8 +15,8 @@ namespace Yueby.Utils
         private readonly bool _isShowAddButton;
         private readonly bool _isShowRemoveButton;
 
-        public bool IsDisableAddButton;
-        public bool IsDisableRemoveButton;
+        public bool AddButtonEnabled { get; set; } = true;
+        public bool RemoveButtonEnabled { get; set; } = true;
 
         public Vector2 ScrollPos;
         public UnityAction OnAdd;
@@ -202,7 +202,7 @@ namespace Yueby.Utils
 
                     if (_isShowAddButton)
                     {
-                        EditorGUI.BeginDisabledGroup(IsDisableAddButton);
+                        EditorGUI.BeginDisabledGroup(!AddButtonEnabled);
                         if (GUILayout.Button("+", GUILayout.Width(25), GUILayout.Height(EditorGUIUtility.singleLineHeight)))
                         {
                             //添加
@@ -216,7 +216,7 @@ namespace Yueby.Utils
 
                     if (_isShowRemoveButton)
                     {
-                        EditorGUI.BeginDisabledGroup(IsDisableRemoveButton);
+                        EditorGUI.BeginDisabledGroup(!RemoveButtonEnabled);
                         if (GUILayout.Button("-", GUILayout.Width(25), GUILayout.Height(EditorGUIUtility.singleLineHeight)))
                             List.onRemoveCallback?.Invoke(List);
                         EditorGUI.EndDisabledGroup();
@@ -265,7 +265,7 @@ namespace Yueby.Utils
 
                     if (_isShowAddButton)
                     {
-                        EditorGUI.BeginDisabledGroup(IsDisableAddButton);
+                        EditorGUI.BeginDisabledGroup(!AddButtonEnabled);
                         if (GUILayout.Button("+", GUILayout.Width(25), GUILayout.Height(18)))
                         {
                             //添加
@@ -279,7 +279,7 @@ namespace Yueby.Utils
 
                     if (_isShowRemoveButton)
                     {
-                        EditorGUI.BeginDisabledGroup(IsDisableRemoveButton);
+                        EditorGUI.BeginDisabledGroup(!RemoveButtonEnabled);
                         if (GUILayout.Button("-", GUILayout.Width(25), GUILayout.Height(18)))
                             List.onRemoveCallback?.Invoke(List);
                         EditorGUI.EndDisabledGroup();

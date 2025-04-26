@@ -2,7 +2,6 @@ using System;
 using UnityEditor;
 using UnityEngine;
 
-
 namespace Yueby.ModalWindow
 {
     public class ModalEditorWindow : EditorWindow

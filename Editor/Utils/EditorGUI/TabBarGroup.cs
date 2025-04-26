@@ -13,6 +13,11 @@ namespace Yueby.Utils
             _tabBarElements = tabBarElements;
         }
 
+        public TabBarGroup()
+        {
+        }
+
+
         public void Add(TabBarElement element)
         {
             if (!_tabBarElements.Contains(element))

@@ -29,7 +29,7 @@ namespace Yueby.Utils
 
             var rect = new Rect(x, y, 18, 18);
 
-            UnityEngine.GUI.DrawTexture(rect, EditorGUIUtility.isProSkin ? _darkLanguageIcon : _lightLanguageIcon);
+            GUI.DrawTexture(rect, EditorGUIUtility.isProSkin ? _darkLanguageIcon : _lightLanguageIcon);
             rect.x += rect.width + 5;
             rect.width = 80;
             rect.height = 20;
